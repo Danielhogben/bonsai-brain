@@ -1,0 +1,22 @@
+# Ignore large data and local state
+postgres-data/
+redis-data/
+node_modules/
+Downloads/
+llama-models/
+llama.cpp-bin/
+*.xz
+*.img
+*.tar.gz
+.vscode/
+.idea/
+.gradle/
+build/
+out/
+.gradle/
+**/build/
+**/target/
+venv/
+.env
+.venv/
+__pycache__/
