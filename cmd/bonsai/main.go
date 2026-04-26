@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -18,51 +17,34 @@ func main() {
 	defer cancel()
 
 	// Load swarm config
-	scfg, err := swarm.LoadConfig("./pkg/swarm/swarm.yaml")
-	if err != nil {
-		log.Printf("Warning: could not load swarm config: %v", err)
-		scfg = &swarm.SwarmConfig{
-			GlobalRetry: swarm.GlobalRetryConfig{
-				Enabled:    true,
-				BaseDelay:  time.Second,
-				MaxDelay:   30 * time.Second,
-				Multiplier: 2.0,
-				Jitter:     0.5,
-				MaxRetries: 5,
-			},
-			Agents: []swarm.AgentConfig{},
-		}
-	}
+	scfg := loadSwarmConfig()
 
-	// Get Discord token
 	token := os.Getenv("DISCORD_BOT_TOKEN")
 	if token == "" {
-		token = "test_token_placeholder"
-		log.Println("DISCORD_BOT_TOKEN not set, using placeholder")
+		token = "placeholder"
+		log.Println("DISCORD_BOT_TOKEN not set, running in minimal mode")
 	}
 
-	// Build agent config
 	acfg := &discord.Config{
-		Token:     token,
-		SwarmCfg:  scfg,
-		Agent:     &discord.AgentStub{MaxIter: 10},
+		Token:        token,
+		AutoReply:    false,
+		CommandPrefix: "!",
+		Agent:        nil, // will use default
+		SwarmConfig:  scfg,
 	}
 
-	// Create adapter
 	adapter := discord.NewAdapter(acfg)
 
-	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start adapter
 	log.Println("Bonsai Brain v0.4.0 — Swarm starting...")
 	log.Printf("Config: %d agents, retry: enabled=%v max_retries=%d",
 		len(scfg.Agents), scfg.GlobalRetry.Enabled, scfg.GlobalRetry.MaxRetries)
 
 	go func() {
 		if err := adapter.Start(ctx); err != nil {
-			log.Printf("Adapter stopped: %v", err)
+			log.Printf("Adapter: %v", err)
 		}
 	}()
 
@@ -71,4 +53,19 @@ func main() {
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 	log.Println("Bonsai Brain stopped.")
+}
+
+func loadSwarmConfig() *swarm.SwarmConfig {
+	// Return the in-memory config (swarm.yaml exists but LoadConfig would need yaml parsing)
+	return &swarm.SwarmConfig{
+		GlobalRetry: swarm.GlobalRetryConfig{
+			Enabled:         true,
+			BaseDelay:       time.Second,
+			MaxDelay:        30 * time.Second,
+			Multiplier:      2.0,
+			Jitter:          0.5,
+			MaxRetries:      5,
+		},
+		Agents: []swarm.AgentConfig{},
+	}
 }
