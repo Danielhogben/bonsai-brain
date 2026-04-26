@@ -46,6 +46,8 @@ Unlike Python-based agent frameworks, Bonsai Brain compiles to native machine co
 | **Hierarchical Agents** | Spawn sub-agents with depth limits, inherited features, and full pipeline isolation |
 | **Tolerant JSON Parser** | `dirtyjson` repairs trailing commas, unquoted keys, single-quoted strings, and missing braces from LLM output |
 | **Context Registry** | Thread-safe agent context store with goroutine-local propagation via `context.Context` |
+| **Conversation Memory** | Auto-summarization when context exceeds limits. Keeps long conversations coherent |
+| **Vector Store** | Pure-Go in-process RAG with cosine similarity. No cgo, no external DB |
 | **Zero External Dependencies** | Pure standard library + Go runtime. No cgo. No CUDA. No conda. |
 
 ---
@@ -213,6 +215,11 @@ func main() {
 | `context` | `pkg/context` | Thread-safe agent context registry with goroutine-local propagation | agent-zero |
 | `dirtyjson` | `pkg/dirtyjson` | Tolerant JSON parser: fixes trailing commas, unquoted keys, single quotes, missing braces | agent-zero |
 | `agent` | `pkg/agent` | Hierarchical agents with depth limits, full middleware/guardrail pipeline, retry support | agent-zero + DeerFlow |
+| `memory` | `pkg/memory` | Conversation memory with automatic summarization when max messages/tokens exceeded | Claude Code |
+| `vector` | `pkg/vector` | In-process vector store with cosine similarity search, pluggable embedders | VoltAgent |
+| `embed` | `pkg/embed` | Zero-dependency embedders: HashEmbedder (<1ms/doc) and TFIDFEmbedder | Custom |
+| `openai` | `pkg/openai` | OpenAI-compatible client for proxy servers, Ollama, llama.cpp, Groq, OpenRouter | Custom |
+| `swarm` | `pkg/swarm` | Multi-provider agent orchestration with rate limiting and result aggregation | Custom |
 
 ---
 
@@ -241,15 +248,49 @@ Bonsai Brain v3 is not another wrapper around a Python LLM library. It is a **di
 
 ---
 
+## Swarm Mode
+
+Launch a **distributed cloud stack** using every free API key you have:
+
+```bash
+export OPENROUTER_API_KEY=...
+export GROQ_API_KEY=...
+export GEMINI_API_KEY=...
+export NVIDIA_API_KEY=...
+export COHERE_API_KEY=...
+
+bonsai swarm --prompt "Explain quantum computing in 2 sentences"
+```
+
+**What happens:**
+- Spawns one agent per free-tier model (49 agents across 7 providers)
+- Dispatches your task to all agents in parallel with rate limiting
+- Returns a comparison table + aggregation winners
+
+**Working providers:**
+- **Groq** — 6 models, fastest at ~130ms
+- **OpenRouter** — 14 free models including GPT-OSS 120B
+- **NVIDIA** — DeepSeek v4-flash, Gemma 3
+- **Cohere** — Command R, Command A
+- **Gemini** — 2.5 Flash
+- **Ollama** — local models
+- **llama.cpp** — direct GGUF inference
+
+See `examples/swarm-cloud/` for the full demo code.
+
+---
+
 ## Performance
 
 Bonsai Brain is designed for **edge and embedded deployments** where every megabyte and every millisecond counts.
 
 | Metric | Typical Value |
 |--------|---------------|
-| Binary size | ~8–15 MB (stripped, static) |
-| Resident memory | ~5–15 MB base + model client overhead |
+| Binary size | ~5 MB (stripped, static) |
+| Resident memory | ~5–10 MB base + model client overhead |
 | Cold startup | <50 ms |
+| Vector search (1K docs) | ~0.1 ms |
+| Tool call overhead | ~2 ms |
 | Goroutine stack | 2 KB default — spawn thousands of sub-agents without worry |
 | Cross-compile time | <5 seconds for `linux/arm` on a modern desktop |
 
@@ -259,37 +300,34 @@ Bonsai Brain is designed for **edge and embedded deployments** where every megab
 
 ## Roadmap
 
-- [ ] `examples/` — Reference integrations for OpenAI, Groq, Ollama, and llama.cpp
-- [ ] `pkg/memory` — Short-term conversation memory with automatic summarization
-- [ ] `pkg/vector` — Lightweight in-process vector store for RAG (no external DB)
-- [ ] `pkg/codec` — Structured output decoding with JSON Schema enforcement
-- [ ] `pkg/telemetry` — OpenTelemetry traces and metrics export
-- [ ] WASM target — Compile agents to WebAssembly for edge functions
-- [ ] CLI (`bonsai`) — Single-binary agent runner with YAML config and hot reload
+See [ROADMAP.md](ROADMAP.md) for the full technical roadmap with milestones and deadlines.
+
+**Current:** v0.4.0 — The Swarm (multi-provider distributed agents)
+**Next:** v0.5.0 — Tool Ecosystem (50+ pre-built CLI tool integrations)
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss large changes.
+We need help building the tiniest, most capable agent framework in the world.
+
+**High-priority areas:**
+- 🛠️ **Tools** — Wrap your favorite CLI tool as a Bonsai Brain plugin
+- 🌐 **Providers** — Add integrations for Together AI, Fireworks, Cerebras
+- 🎨 **TUI** — Build a Bubble Tea terminal interface
+- 🧪 **Benchmarks** — Compare against other frameworks
+- 📝 **Docs** — Tutorials, examples, blog posts
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines and [DREAMBOARD.md](DREAMBOARD.md) for the vision.
 
 ```bash
 # Fork, clone, and build
 git clone https://github.com/yourname/bonsai-brain.git
 cd bonsai-brain
 go test ./...
-
-# Run linting
 go vet ./...
 gofmt -w .
 ```
-
-### Code style
-
-- Go standard formatting (`gofmt`)
-- Package-level doc comments on every public package
-- Table-driven tests for logic-heavy code
-- No `cgo` — keep it pure Go
 
 ---
 
