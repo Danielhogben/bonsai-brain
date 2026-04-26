@@ -82,13 +82,12 @@ func FreeTierModels() map[ProviderType][]string {
 			"gemma-3-27b-it",
 		},
 		ProviderNVIDIA: {
-			"01-ai/yi-large",
-			"google/gemma-3-12b-it",
-			"deepseek-ai/deepseek-v3.2",
 			"deepseek-ai/deepseek-v4-flash",
-			"meta-llama/llama-3.1-8b-instruct",
-			"mistralai/mistral-7b-instruct",
-			"mistralai/mixtral-8x7b-instruct",
+			"deepseek-ai/deepseek-v4-pro",
+			"deepseek-ai/deepseek-v3.2",
+			"google/gemma-3-4b-it",
+			"google/gemma-3-12b-it",
+			"google/gemma-3-27b-it",
 		},
 		ProviderCohere: {
 			"command-r-08-2024",

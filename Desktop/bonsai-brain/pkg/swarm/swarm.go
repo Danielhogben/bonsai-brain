@@ -9,6 +9,7 @@ import (
 
 	"github.com/donn/bonsai-brain/pkg/agent"
 	"github.com/donn/bonsai-brain/pkg/engine"
+	"github.com/donn/bonsai-brain/pkg/tools"
 )
 
 // Task is a unit of work sent to the swarm.
@@ -85,8 +86,47 @@ func (s *Swarm) Spawn(modelID string) (*SwarmAgent, error) {
 		Tools: make(map[string]engine.ToolEntry),
 	}
 
+	// Register tools inspired by OpenRouter top apps (OpenClaw, Hermes, Claude Code)
+	eng.RegisterTool(
+		engine.ToolSchema{Name: "web_search", Description: "Search the web for information", Parameters: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			return tools.TavilySearch(ctx, args["query"].(string), 3)
+		},
+	)
+	eng.RegisterTool(
+		engine.ToolSchema{Name: "fetch_url", Description: "Fetch a web page", Parameters: map[string]any{"type": "object", "properties": map[string]any{"url": map[string]any{"type": "string"}}, "required": []string{"url"}}},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			html, err := tools.BrowserFetch(ctx, args["url"].(string))
+			if err != nil {
+				return "", err
+			}
+			if len(html) > 2000 {
+				html = html[:2000] + "..."
+			}
+			return html, nil
+		},
+	)
+	eng.RegisterTool(
+		engine.ToolSchema{Name: "read_file", Description: "Read a file", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []string{"path"}}},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			return tools.FileRead(ctx, args["path"].(string))
+		},
+	)
+	eng.RegisterTool(
+		engine.ToolSchema{Name: "write_file", Description: "Write to a file", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			return tools.FileWrite(ctx, args["path"].(string), args["content"].(string))
+		},
+	)
+	eng.RegisterTool(
+		engine.ToolSchema{Name: "grep_files", Description: "Search for text in files", Parameters: map[string]any{"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string"}, "glob": map[string]any{"type": "string"}}, "required": []string{"pattern", "glob"}}},
+		func(ctx context.Context, args map[string]any) (string, error) {
+			return tools.FileGrep(ctx, args["pattern"].(string), args["glob"].(string))
+		},
+	)
+
 	cfg := agent.DefaultConfig(agentID)
-	cfg.SystemPrompt = "You are a helpful assistant. Be concise."
+	cfg.SystemPrompt = "You are a helpful assistant with access to web search, file tools, and a browser. Be concise."
 	a := agent.New(cfg, eng)
 
 	sa := &SwarmAgent{
