@@ -294,24 +294,40 @@ func ConsensusWinner(results []TaskResult) (Result, error) {
 	}, nil
 }
 
-// BestQualityWinner uses a judge model to score each result.
-func BestQualityWinner(judgeModel string) ResultStrategy {
+// BestQualityWinner returns the result with the longest output as a heuristic.
+func BestQualityWinner(results []TaskResult) (Result, error) {
+	var best *TaskResult
+	for i := range results {
+		if results[i].Error != nil {
+			continue
+		}
+		if best == nil || len(results[i].Output) > len(best.Output) {
+			best = &results[i]
+		}
+	}
+	if best == nil {
+		return Result{}, fmt.Errorf("no successful results")
+	}
+	return Result{Winner: *best, AllResults: results, Strategy: "best_quality", Description: "Longest response (heuristic)"}, nil
+}
+
+// JudgeWinner uses an LLM judge to score results and pick the best.
+// It falls back to BestQualityWinner if the judge fails.
+func JudgeWinner(judge *Judge, task string) ResultStrategy {
 	return func(results []TaskResult) (Result, error) {
-		// TODO: implement judge-based scoring.
-		// For now, fall back to longest response heuristic.
-		var best *TaskResult
-		for i := range results {
-			if results[i].Error != nil {
-				continue
-			}
-			if best == nil || len(results[i].Output) > len(best.Output) {
-				best = &results[i]
-			}
+		if judge == nil || judge.Client == nil {
+			return BestQualityWinner(results)
 		}
-		if best == nil {
-			return Result{}, fmt.Errorf("no successful results")
+		idx, err := judge.PickBest(context.Background(), task, results)
+		if err != nil || idx < 0 || idx >= len(results) {
+			return BestQualityWinner(results)
 		}
-		return Result{Winner: *best, AllResults: results, Strategy: "best_quality", Description: "Longest response (heuristic)"}, nil
+		return Result{
+			Winner:      results[idx],
+			AllResults:  results,
+			Strategy:    "judge",
+			Description: "LLM judge scored and selected best response",
+		}, nil
 	}
 }
 
