@@ -1,13 +1,22 @@
 ---
-name: Feature request
-about: Suggest an idea for this project
+name: ✨ Feature Request
+about: Suggest an idea for Bonsai Brain
+title: '[FEATURE] '
+labels: enhancement
+assignees: ''
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is.
-
-**Describe the solution you'd like**
+## Summary
 A clear and concise description of what you want to happen.
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+## Motivation
+Why is this needed? What problem does it solve?
+
+## Proposed Solution
+Describe how you think this should work.
+
+## Alternatives
+What other approaches have you considered?
+
+## Additional Context
+Add any other context, mockups, or examples here.

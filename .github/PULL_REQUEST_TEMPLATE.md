@@ -1,16 +1,19 @@
 ## Summary
+What does this PR do?
 
-Describe the change and why it was made.
+## Related Issues
+Fixes #(issue number)
 
-## Related issue
-
-Fixes / Closes: #<issue-number> (if applicable)
-
-## Checklist
-- [ ] Tests added or updated
-- [ ] Linting and type checks passed (ruff/mypy or ESLint)
-- [ ] Documentation updated where needed
+## Changes
+- List the key changes
 
 ## Testing
-Describe how this was tested (commands, environment).
+- [ ] `go test ./...` passes
+- [ ] `go build ./...` passes
+- [ ] Tested manually (describe how)
 
+## Checklist
+- [ ] Code follows project style
+- [ ] No unnecessary dependencies added
+- [ ] Documentation updated if needed
+- [ ] Binary size impact considered

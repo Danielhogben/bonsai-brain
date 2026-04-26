@@ -1,0 +1,65 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/donn/bonsai-brain/pkg/discord"
+	"github.com/donn/bonsai-brain/pkg/swarm"
+)
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Println("Shutting down gracefully...")
+		cancel()
+	}()
+
+	// Load swarm config
+	cfg, err := swarm.LoadConfig("./pkg/swarm/swarm.yaml")
+	if err != nil {
+		log.Printf("Warning: could not load swarm config: %v. Using defaults.", err)
+		cfg = swarm.DefaultConfig()
+	}
+
+	// Initialize Discord adapter
+	adapter, err := discord.NewAdapter(&discord.Config{
+		Token:     getEnv("DISCORD_BOT_TOKEN", ""),
+		SwarmCfg:  cfg,
+		LogPrefix: "[BONSAI]",
+	})
+	if err != nil {
+		log.Fatalf("Failed to create adapter: %v", err)
+	}
+
+	// Start the bot
+	log.Println("Starting Bonsai Brain...")
+	if err := adapter.Start(ctx); err != nil {
+		log.Fatalf("Failed to start adapter: %v", err)
+	}
+
+	log.Println("Bonsai Brain started successfully. Press Ctrl+C to stop.")
+
+	// Wait for shutdown
+	<-ctx.Done()
+
+	log.Println("Bonsai Brain stopped.")
+}
+
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}

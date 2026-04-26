@@ -1,21 +1,68 @@
-Thanks for contributing! A few repo-specific notes to make contributions straightforward.
+# Contributing to Bonsai Brain
 
-Repository layout
-- This workspace contains multiple independent projects at the top level. Work is project-scoped: cd into the subproject before running build/test commands.
+Thank you for considering a contribution! 🌳
 
-Project tooling preferences
-- Python: prefer 'uv' for dependency management where configured. Use 'pytest' for tests, 'ruff' for lint, and 'mypy' for type checks.
-- Node: prefer 'pnpm' over 'npm' when available. Use 'npm test' or 'pnpm test' to run tests.
-- Kotlin/Java: use './gradlew' for builds and tests. Target Java 21+ where required.
-- Go: use 'make' targets if provided (e.g., make build).
+## Quick Start
 
-How to test changes
-- Run the project's test suite and a single test locally (see copilot-instructions.md for per-ecosystem single-test commands).
-- Ensure linters pass before opening a PR.
+1. **Fork** the repo
+2. **Clone** your fork
+3. **Create a branch** (`git checkout -b feature/my-thing`)
+4. **Make changes**
+5. **Test** (`go test ./...` && `go build ./...`)
+6. **Commit** (`git commit -m "feat: add my thing"`)
+7. **Push** (`git push origin feature/my-thing`)
+8. **Open a PR**
 
-Pull request expectations
-- Explain the change, link related issues, include testing steps, and run linters.
-- Keep commits focused and squashed when appropriate.
+## Development Setup
 
-Contact
-- If unsure which subproject to modify, ask in an issue first.
+```bash
+go version  # needs 1.22+
+go test ./...
+go build ./...
+```
+
+## Code Style
+
+- Go standard formatting (`gofmt`)
+- Clear, readable code over clever code
+- Every exported type/function needs a doc comment
+- Keep functions under 50 lines when possible
+- Prefer composition over inheritance
+
+## Testing
+
+- All new packages should have tests
+- Run `go test ./...` before committing
+- If you add a tool, add a test that validates the schema
+
+## Commit Messages
+
+Follow conventional commits:
+- `feat:` new feature
+- `fix:` bug fix
+- `docs:` documentation
+- `test:` tests
+- `refactor:` code restructuring
+- `perf:` performance improvement
+- `chore:` maintenance
+
+## What to Contribute
+
+See [ROADMAP.md](ROADMAP.md) for milestones and [DREAMBOARD.md](DREAMBOARD.md) for the vision.
+
+**High-priority areas:**
+- New tools (wrap your favorite CLI!)
+- Provider integrations (Together AI, Fireworks, Cerebras)
+- TUI components (Bubble Tea)
+- Documentation and examples
+- Benchmarks and performance optimization
+
+## Getting Help
+
+- Open an issue with the `question` label
+- Comment on an existing issue
+- Check the examples in `examples/`
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.
