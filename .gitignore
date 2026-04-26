@@ -23,3 +23,15 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Other build systems
+.gradle/
+build/
+out/
+**/build/
+**/target/
+venv/
+.env
+.venv/
+__pycache__/
+../../
