@@ -1,0 +1,593 @@
+// Package discord provides a Discord channel adapter for Bonsai Brain.
+// It turns Discord messages into agent interactions and logs everything
+// to designated channels.
+package discord
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/donn/bonsai-brain/pkg/agent"
+	"github.com/donn/bonsai-brain/pkg/engine"
+	"github.com/donn/bonsai-brain/pkg/memory"
+)
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+// Config holds Discord adapter settings.
+type Config struct {
+	Token string // Discord bot token
+	
+	// Channel mappings
+	MainChannelID  string // Primary channel for AI interactions
+	LogChannelID   string // Channel for conversation logs
+	ErrorChannelID string // Channel for errors
+	
+	// Behavior
+	AutoReply     bool   // Auto-reply in main channel
+	CommandPrefix string // e.g., "!"
+	
+	// Agent
+	Agent *agent.Agent
+}
+
+// ---------------------------------------------------------------------------
+// Adapter
+// ---------------------------------------------------------------------------
+
+// Adapter bridges Discord and Bonsai Brain.
+type Adapter struct {
+	config Config
+	session *discordgo.Session
+	
+	// Per-user memory sessions
+	sessions map[string]*memory.Memory
+	sessionMu sync.RWMutex
+	
+	// Logging
+	logBuffer []LogEntry
+	logMu     sync.Mutex
+}
+
+// LogEntry represents a single interaction for logging.
+type LogEntry struct {
+	Timestamp time.Time
+	UserID    string
+	Username  string
+	Channel   string
+	Input     string
+	Output    string
+	Model     string
+	Duration  time.Duration
+}
+
+// NewAdapter creates a Discord adapter.
+func NewAdapter(cfg Config) (*Adapter, error) {
+	session, err := discordgo.New("Bot " + cfg.Token)
+	if err != nil {
+		return nil, fmt.Errorf("discord: failed to create session: %w", err)
+	}
+	
+	return &Adapter{
+		config:   cfg,
+		session:  session,
+		sessions: make(map[string]*memory.Memory),
+	}, nil
+}
+
+// Start connects to Discord and begins listening.
+func (a *Adapter) Start(ctx context.Context) error {
+	// Register handlers
+	a.session.AddHandler(a.onReady)
+	a.session.AddHandler(a.onMessage)
+	a.session.AddHandler(a.onSlashCommand)
+	
+	// Open connection
+	if err := a.session.Open(); err != nil {
+		return fmt.Errorf("discord: failed to open connection: %w", err)
+	}
+	
+	// Register slash commands
+	if err := a.registerCommands(); err != nil {
+		return fmt.Errorf("discord: failed to register commands: %w", err)
+	}
+	
+	// Start log flush loop
+	go a.logFlushLoop(ctx)
+	
+	<-ctx.Done()
+	return a.session.Close()
+}
+
+// ---------------------------------------------------------------------------
+// Event Handlers
+// ---------------------------------------------------------------------------
+
+func (a *Adapter) onReady(s *discordgo.Session, r *discordgo.Ready) {
+	fmt.Printf("🤖 Discord agent ready: %s\n", r.User.Username)
+	
+	// Set presence
+	s.UpdateGameStatus(0, "!help | Bonsai Brain")
+}
+
+func (a *Adapter) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
+	// Ignore own messages
+	if m.Author.ID == s.State.User.ID {
+		return
+	}
+	
+	// Check if in main channel or DMs
+	isMain := m.ChannelID == a.config.MainChannelID
+	isDM := m.GuildID == ""
+	
+	if !isMain && !isDM {
+		return
+	}
+	
+	content := strings.TrimSpace(m.Content)
+	
+	// Handle commands
+	if strings.HasPrefix(content, a.config.CommandPrefix) {
+		a.handleCommand(m, content)
+		return
+	}
+	
+	// Auto-reply if enabled
+	if !a.config.AutoReply {
+		return
+	}
+	
+	// Process through agent
+	go a.processMessage(m, content)
+}
+
+func (a *Adapter) onSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+	
+	data := i.ApplicationCommandData()
+	
+	switch data.Name {
+	case "ask":
+		a.handleSlashAsk(s, i, data)
+	case "memory":
+		a.handleSlashMemory(s, i, data)
+	case "status":
+		a.handleSlashStatus(s, i)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Message Processing
+// ---------------------------------------------------------------------------
+
+func (a *Adapter) processMessage(m *discordgo.MessageCreate, content string) {
+	start := time.Now()
+	
+	// Get or create session memory
+	mem := a.getSession(m.Author.ID)
+	
+	// Typing indicator
+	a.session.ChannelTyping(m.ChannelID)
+	
+	// Build messages from memory
+	messages := mem.BuildMessages()
+	
+	// Add current message
+	messages = append(messages, engine.Message{
+		Role:    "user",
+		Content: content,
+	})
+	
+	// Run agent
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	
+	maxIter := a.config.Agent.Config.MaxIter
+	if maxIter <= 0 {
+		maxIter = 10
+	}
+	
+	resp, err := a.config.Agent.Engine.Run(ctx, messages, maxIter)
+	
+	duration := time.Since(start)
+	
+	var output string
+	if err != nil {
+		output = fmt.Sprintf("❌ Error: %v", err)
+		a.logError(m.Author.Username, err)
+	} else {
+		output = resp.Content
+	}
+	
+	// Store in memory
+	mem.AddTurn(ctx, memory.Turn{
+		User:      content,
+		Assistant: output,
+	})
+	
+	// Send response
+	embed := &discordgo.MessageEmbed{
+		Description: truncate(output, 4000),
+		Color:       0x3498db,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: fmt.Sprintf("Model: local | Time: %v", duration.Round(time.Millisecond)),
+		},
+	}
+	
+	a.session.ChannelMessageSendEmbed(m.ChannelID, embed)
+	
+	// Log interaction
+	a.logInteraction(LogEntry{
+		Timestamp: time.Now(),
+		UserID:    m.Author.ID,
+		Username:  m.Author.Username,
+		Channel:   m.ChannelID,
+		Input:     content,
+		Output:    output,
+		Model:     "local",
+		Duration:  duration,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+func (a *Adapter) handleCommand(m *discordgo.MessageCreate, content string) {
+	parts := strings.Fields(content)
+	if len(parts) == 0 {
+		return
+	}
+	
+	cmd := strings.TrimPrefix(parts[0], a.config.CommandPrefix)
+	args := strings.Join(parts[1:], " ")
+	
+	switch cmd {
+	case "help":
+		a.sendHelp(m.ChannelID)
+	case "memory", "history":
+		a.showMemory(m.ChannelID, m.Author.ID)
+	case "clear":
+		a.clearMemory(m.Author.ID)
+		a.session.ChannelMessageSend(m.ChannelID, "🧠 Memory cleared.")
+	case "status":
+		a.sendStatus(m.ChannelID)
+	case "log":
+		if args != "" {
+			a.sendLogToChannel(args)
+		}
+	}
+}
+
+func (a *Adapter) sendHelp(channelID string) {
+	help := `🤖 **Bonsai Brain - Discord Agent**
+
+**Commands:**
+` + "\`\`\`" + `
+!ask <question>     Ask anything (uses AI)
+!memory             Show conversation history
+!clear              Clear your conversation memory
+!status             Show bot status
+!log <message>      Log a message to the log channel
+!help               Show this help
+` + "\`\`\`" + `
+
+**Slash Commands:**
+• /ask <question> - Ask the AI
+• /memory - View your memory
+• /status - Bot status
+
+Just type normally in this channel and I'll respond automatically!`
+
+	a.session.ChannelMessageSend(channelID, help)
+}
+
+func (a *Adapter) showMemory(channelID, userID string) {
+	mem := a.getSession(userID)
+	
+	var turns []string
+	for i, turn := range mem.Turns {
+		turns = append(turns, fmt.Sprintf("**Turn %d:**\n👤 %s\n🤖 %s", 
+			i+1, truncate(turn.User, 200), truncate(turn.Assistant, 200)))
+	}
+	
+	if len(turns) == 0 {
+		a.session.ChannelMessageSend(channelID, "🧠 No memory yet.")
+		return
+	}
+	
+	text := strings.Join(turns, "\n\n")
+	if len(text) > 4000 {
+		text = text[:4000] + "\n... (truncated)"
+	}
+	
+	embed := &discordgo.MessageEmbed{
+		Title:       "🧠 Your Memory",
+		Description: text,
+		Color:       0x9b59b6,
+	}
+	
+	a.session.ChannelMessageSendEmbed(channelID, embed)
+}
+
+func (a *Adapter) clearMemory(userID string) {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	
+	if mem, ok := a.sessions[userID]; ok {
+		mem.Clear()
+	}
+}
+
+func (a *Adapter) sendStatus(channelID string) {
+	var memCount int
+	a.sessionMu.RLock()
+	memCount = len(a.sessions)
+	a.sessionMu.RUnlock()
+	
+	status := fmt.Sprintf(`🤖 **Bonsai Brain Status**
+
+🧠 Active sessions: %d
+💾 Memory per session: %d messages
+📝 Logging: %s
+🎯 Model: Local (llama.cpp)
+
+Type normally to chat, or use !help for commands.`,
+		memCount, memory.DefaultConfig().MaxMessages,
+		func() string {
+			if a.config.LogChannelID != "" {
+				return "Enabled"
+			}
+			return "Disabled"
+		}())
+	
+	a.session.ChannelMessageSend(channelID, status)
+}
+
+// ---------------------------------------------------------------------------
+// Slash Commands
+// ---------------------------------------------------------------------------
+
+func (a *Adapter) registerCommands() error {
+	commands := []*discordgo.ApplicationCommand{
+		{
+			Name:        "ask",
+			Description: "Ask the AI agent a question",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "question",
+					Description: "What do you want to ask?",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "memory",
+			Description: "View your conversation memory",
+		},
+		{
+			Name:        "status",
+			Description: "Check bot status",
+		},
+	}
+	
+	for _, cmd := range commands {
+		_, err := a.session.ApplicationCommandCreate(a.session.State.User.ID, "", cmd)
+		if err != nil {
+			return fmt.Errorf("register %s: %w", cmd.Name, err)
+		}
+	}
+	
+	return nil
+}
+
+func (a *Adapter) handleSlashAsk(s *discordgo.Session, i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	// Acknowledge immediately
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "🤔 Thinking...",
+		},
+	})
+	
+	// Get question
+	var question string
+	for _, opt := range data.Options {
+		if opt.Name == "question" {
+			question = opt.StringValue()
+		}
+	}
+	
+	// Process
+	start := time.Now()
+	mem := a.getSession(i.Member.User.ID)
+	messages := mem.BuildMessages()
+	messages = append(messages, engine.Message{Role: "user", Content: question})
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	
+	resp, err := a.config.Agent.Engine.Run(ctx, messages, 10)
+	duration := time.Since(start)
+	
+	var output string
+	if err != nil {
+		output = fmt.Sprintf("❌ Error: %v", err)
+	} else {
+		output = resp.Content
+		mem.AddTurn(ctx, memory.Turn{User: question, Assistant: output})
+	}
+	
+	// Update response
+	embed := &discordgo.MessageEmbed{
+		Description: truncate(output, 4000),
+		Color:       0x3498db,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: fmt.Sprintf("Time: %v", duration.Round(time.Millisecond)),
+		},
+	}
+	
+	// Use webhook to edit
+	_, err = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Embeds: &[]*discordgo.MessageEmbed{embed},
+	})
+	if err != nil {
+		// Fallback: send new message
+		s.ChannelMessageSendEmbed(i.ChannelID, embed)
+	}
+	
+	// Log
+	a.logInteraction(LogEntry{
+		Timestamp: time.Now(),
+		UserID:    i.Member.User.ID,
+		Username:  i.Member.User.Username,
+		Channel:   i.ChannelID,
+		Input:     question,
+		Output:    output,
+		Duration:  duration,
+	})
+}
+
+func (a *Adapter) handleSlashMemory(s *discordgo.Session, i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	a.showMemory(i.ChannelID, i.Member.User.ID)
+}
+
+func (a *Adapter) handleSlashStatus(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "✅ Bot is online and ready!",
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Memory Management
+// ---------------------------------------------------------------------------
+
+func (a *Adapter) getSession(userID string) *memory.Memory {
+	a.sessionMu.RLock()
+	mem, ok := a.sessions[userID]
+	a.sessionMu.RUnlock()
+	
+	if ok {
+		return mem
+	}
+	
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	
+	// Double-check
+	if mem, ok := a.sessions[userID]; ok {
+		return mem
+	}
+	
+	mem = memory.New(memory.DefaultConfig())
+	mem.SetSystemPrompt("You are Bonsai Brain, a helpful AI assistant running in Discord. You have access to tools and can help with coding, analysis, creative writing, and general questions. Be concise but thorough.")
+	a.sessions[userID] = mem
+	
+	return mem
+}
+
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
+
+func (a *Adapter) logInteraction(entry LogEntry) {
+	if a.config.LogChannelID == "" {
+		return
+	}
+	
+	a.logMu.Lock()
+	a.logBuffer = append(a.logBuffer, entry)
+	a.logMu.Unlock()
+}
+
+func (a *Adapter) logError(username string, err error) {
+	if a.config.ErrorChannelID == "" {
+		return
+	}
+	
+	embed := &discordgo.MessageEmbed{
+		Title:       "❌ Error",
+		Description: fmt.Sprintf("User: %s\nError: %v", username, err),
+		Color:       0xe74c3c,
+		Timestamp:   time.Now().Format(time.RFC3339),
+	}
+	
+	a.session.ChannelMessageSendEmbed(a.config.ErrorChannelID, embed)
+}
+
+func (a *Adapter) sendLogToChannel(message string) {
+	if a.config.LogChannelID == "" {
+		return
+	}
+	
+	a.session.ChannelMessageSend(a.config.LogChannelID, fmt.Sprintf("📝 %s", message))
+}
+
+func (a *Adapter) logFlushLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.flushLogs()
+		}
+	}
+}
+
+func (a *Adapter) flushLogs() {
+	a.logMu.Lock()
+	entries := a.logBuffer
+	a.logBuffer = nil
+	a.logMu.Unlock()
+	
+	if len(entries) == 0 || a.config.LogChannelID == "" {
+		return
+	}
+	
+	var parts []string
+	for _, e := range entries {
+		parts = append(parts, fmt.Sprintf(
+			"[%s] **%s**: %s → %s (%v)",
+			e.Timestamp.Format("15:04"),
+			e.Username,
+			truncate(e.Input, 50),
+			truncate(e.Output, 50),
+			e.Duration.Round(time.Millisecond),
+		))
+	}
+	
+	msg := strings.Join(parts, "\n")
+	if len(msg) > 2000 {
+		msg = msg[:2000] + "\n..."
+	}
+	
+	a.session.ChannelMessageSend(a.config.LogChannelID, msg)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
