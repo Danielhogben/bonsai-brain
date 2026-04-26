@@ -1,169 +1,33 @@
-// Bonsai Brain CLI — single-binary agent runner.
-//
-// Usage:
-//
-//	bonsai run --config agent.yaml    # Run agent from config file
-//	bonsai chat                       # Interactive REPL
-//	bonsai version                    # Show version
-//
+// swarm-cloud demonstrates a full distributed cloud stack using every
+// available API key and free-tier model. It spawns one sub-agent per model,
+// sends a task in parallel, and compares results.
 package main
 
 import (
-	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/donn/bonsai-brain/pkg/agent"
 	"github.com/donn/bonsai-brain/pkg/engine"
-	"github.com/donn/bonsai-brain/pkg/guardrail"
-	"github.com/donn/bonsai-brain/pkg/middleware"
 	"github.com/donn/bonsai-brain/pkg/swarm"
 )
 
-const version = "0.3.0"
-
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case "run":
-		runCmd(os.Args[2:])
-	case "chat":
-		chatCmd(os.Args[2:])
-	case "swarm":
-		swarmCmd(os.Args[2:])
-	case "version":
-		fmt.Println("bonsai", version)
-	default:
-		printUsage()
-		os.Exit(1)
-	}
-}
-
-func printUsage() {
-	fmt.Println("Usage: bonsai <command> [options]")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  run      Run an agent from a YAML config file")
-	fmt.Println("  chat     Start an interactive chat session")
-	fmt.Println("  swarm    Launch the full cloud swarm stack")
-	fmt.Println("  version  Show version")
-	fmt.Println()
-	fmt.Println("Examples:")
-	fmt.Println("  bonsai run --config agent.yaml")
-	fmt.Println("  bonsai chat --model qwen/qwen3-32b")
-	fmt.Println("  bonsai swarm")
-}
-
-// ---------------------------------------------------------------------------
-// run
-// ---------------------------------------------------------------------------
-
-func runCmd(args []string) {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	configPath := fs.String("config", "agent.yaml", "Path to agent config file")
-	_ = fs.Parse(args)
-
-	fmt.Printf("🌳 Bonsai Brain v%s — run mode\n", version)
-	fmt.Printf("Loading config: %s\n", *configPath)
-	fmt.Println("(YAML config loader coming in v0.4 — using built-in demo for now)")
-	fmt.Println()
-
-	// Demo run with mock model until YAML loader is implemented.
-	ctx := context.Background()
-	eng := engine.NewQueryEngine(&MockModel{})
-	eng.RegisterTool(
-		engine.ToolSchema{Name: "echo", Description: "Echo input", Parameters: map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}}},
-		func(_ context.Context, args map[string]any) (string, error) { return args["text"].(string), nil },
-	)
-
-	cfg := agent.DefaultConfig("cli-demo")
-	cfg.SystemPrompt = "You are Bonsai Brain CLI. Be concise."
-	ag := agent.New(cfg, eng)
-	ag.InGuardrails.Add(guardrail.MaxInputLength(500))
-	ag.OutMiddleware.Add(middleware.TruncateOutput(300))
-
-	reply, err := ag.GenerateText(ctx, "Echo 'Bonsai Brain CLI is running!'")
-	if err != nil {
-		fmt.Println("Error:", err)
-		os.Exit(1)
-	}
-	fmt.Println(reply)
-}
-
-// ---------------------------------------------------------------------------
-// chat
-// ---------------------------------------------------------------------------
-
-func chatCmd(args []string) {
-	fs := flag.NewFlagSet("chat", flag.ExitOnError)
-	modelFlag := fs.String("model", "mistralai/mistral-7b-instruct:free", "Model to use")
-	_ = fs.Parse(args)
-
-	fmt.Printf("🌳 Bonsai Brain v%s — chat mode\n", version)
-	fmt.Printf("Model: %s\n", *modelFlag)
-	fmt.Println("(Connect a real model client in your integration. Using mock for demo.)")
-	fmt.Println()
-	fmt.Println("Type 'quit' to exit, 'clear' to reset history.")
-	fmt.Println()
-
-	ctx := context.Background()
-	eng := engine.NewQueryEngine(&MockModel{})
-	cfg := agent.DefaultConfig("chat")
-	cfg.SystemPrompt = "You are a helpful assistant. Keep responses brief."
-	ag := agent.New(cfg, eng)
-	ag.InGuardrails.Add(guardrail.BlockedKeywords("password", "secret"))
-
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("You: ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		if strings.ToLower(input) == "quit" {
-			fmt.Println("Bonsai Brain: Goodbye! 🌳")
-			break
-		}
-		if strings.ToLower(input) == "clear" {
-			ag.Ctx.History = nil
-			fmt.Println("Bonsai Brain: History cleared.")
-			continue
-		}
-
-		reply, err := ag.GenerateText(ctx, input)
-		if err != nil {
-			fmt.Printf("Bonsai Brain: [ERROR] %v\n\n", err)
-			continue
-		}
-		fmt.Printf("Bonsai Brain: %s\n\n", reply)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// swarm
-// ---------------------------------------------------------------------------
-
-func swarmCmd(args []string) {
-	fs := flag.NewFlagSet("swarm", flag.ExitOnError)
-	prompt := fs.String("prompt", "Explain the concept of 'swarm intelligence' in 2 sentences. Be concise.", "Task prompt to send to all agents")
-	_ = fs.Parse(args)
-
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println("  🌳 BONSAI BRAIN — FULL CLOUD SWARM STACK")
 	fmt.Println("  Maxing out every free API key we have...")
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 
 	ctx := context.Background()
+
+	// ------------------------------------------------------------------
+	// 1. Load all provider configs from environment.
+	// ------------------------------------------------------------------
 	configs := swarm.DefaultProviderConfigs()
 	active := swarm.ActiveProviders(configs)
 
@@ -181,6 +45,9 @@ func swarmCmd(args []string) {
 		os.Exit(1)
 	}
 
+	// ------------------------------------------------------------------
+	// 2. Build provider registry and spawn agents.
+	// ------------------------------------------------------------------
 	registry := swarm.NewProviderRegistry(active)
 	swarmInst := swarm.NewSwarm(registry)
 
@@ -191,28 +58,63 @@ func swarmCmd(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("   Spawned %d agents\n", len(spawned))
+	for _, sa := range spawned {
+		fmt.Printf("      → %-45s (%s)\n", sa.ID, sa.Model)
+	}
 
+	// ------------------------------------------------------------------
+	// 3. Health check all agents with a lightweight ping.
+	// ------------------------------------------------------------------
+	fmt.Println("\n🏥 Health check (sending 'Hi' to each agent)...")
+	healthCtx, healthCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer healthCancel()
+
+	health := swarmInst.HealthCheckAll(healthCtx)
+	healthyCount := 0
+	for id, lat := range health {
+		if lat < 0 {
+			fmt.Printf("   🔴 %-45s DEAD\n", id)
+		} else {
+			fmt.Printf("   🟢 %-45s %v\n", id, lat)
+			healthyCount++
+		}
+	}
+	fmt.Printf("\n   Healthy: %d / %d\n", healthyCount, len(health))
+
+	// ------------------------------------------------------------------
+	// 4. Send a task to every healthy agent in parallel.
+	// ------------------------------------------------------------------
+	if healthyCount == 0 {
+		fmt.Println("❌ No healthy agents. Check your API keys and network.")
+		os.Exit(1)
+	}
+
+	// Task: a simple reasoning question.
 	task := swarm.Task{
-		ID:      "swarm-cli-1",
-		Prompt:  *prompt,
-		System:  "You are a helpful assistant. Be concise.",
+		ID:      "swarm-demo-1",
+		Prompt:  "Explain the concept of 'swarm intelligence' in 2 sentences. Be concise.",
+		System:  "You are a helpful assistant. Keep responses under 50 words.",
 		MaxIter: 1,
 	}
 
-	fmt.Printf("\n📨 Dispatching task to all agents:\n")
+	fmt.Println("\n📨 Dispatching task to all agents:")
 	fmt.Printf("   \"%s\"\n", task.Prompt)
 
-	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, 180*time.Second)
+	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer dispatchCancel()
 
 	start := time.Now()
 	results := swarmInst.Distribute(dispatchCtx, task)
 	elapsed := time.Since(start)
 
+	// ------------------------------------------------------------------
+	// 5. Print results table.
+	// ------------------------------------------------------------------
 	fmt.Println("\n═══════════════════════════════════════════════════════════════")
 	fmt.Println("  RESULTS")
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 
+	// Sort by latency (fastest first).
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Error != nil && results[j].Error == nil {
 			return false
@@ -244,6 +146,9 @@ func swarmCmd(args []string) {
 		fmt.Printf("%-40s %-12v %-10s %s\n", r.AgentID, r.Latency, status, out)
 	}
 
+	// ------------------------------------------------------------------
+	// 6. Aggregate with strategies.
+	// ------------------------------------------------------------------
 	fmt.Println("\n═══════════════════════════════════════════════════════════════")
 	fmt.Println("  AGGREGATION")
 	fmt.Println("═══════════════════════════════════════════════════════════════")
@@ -252,15 +157,20 @@ func swarmCmd(args []string) {
 		fmt.Printf("\n🏁 FIRST WINNER\n   Agent: %s\n   Model: %s\n   Latency: %v\n   Output: %s\n",
 			first.Winner.AgentID, first.Winner.Model, first.Winner.Latency, first.Winner.Output)
 	}
+
 	if fastest, err := swarm.FastestWinner(results); err == nil {
 		fmt.Printf("\n⚡ FASTEST WINNER\n   Agent: %s\n   Model: %s\n   Latency: %v\n   Output: %s\n",
 			fastest.Winner.AgentID, fastest.Winner.Model, fastest.Winner.Latency, fastest.Winner.Output)
 	}
+
 	if consensus, err := swarm.ConsensusWinner(results); err == nil {
 		fmt.Printf("\n🗳️  CONSENSUS WINNER\n   Strategy: %s\n   Output: %s\n",
 			consensus.Description, consensus.Winner.Output)
 	}
 
+	// ------------------------------------------------------------------
+	// 7. Summary stats.
+	// ------------------------------------------------------------------
 	fmt.Println("\n═══════════════════════════════════════════════════════════════")
 	fmt.Println("  SUMMARY")
 	fmt.Println("═══════════════════════════════════════════════════════════════")
@@ -269,7 +179,7 @@ func swarmCmd(args []string) {
 	fail := 0
 	var totalLat time.Duration
 	for _, r := range results {
-		if r.Error == nil && r.Output != "" {
+		if r.Error == nil {
 			success++
 			totalLat += r.Latency
 		} else {
@@ -289,25 +199,10 @@ func swarmCmd(args []string) {
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 }
 
-// ---------------------------------------------------------------------------
-// MockModel
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------------
+// Unused helpers kept for future expansion.
+// ------------------------------------------------------------------
 
-type MockModel struct{}
-
-func (m *MockModel) Stream(_ context.Context, messages []engine.Message, _ []engine.ToolSchema) (*engine.Response, error) {
-	var lastUser string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			lastUser = messages[i].Content
-			break
-		}
-	}
-	if strings.Contains(lastUser, "echo") {
-		parts := strings.SplitN(lastUser, "'", 3)
-		if len(parts) >= 2 {
-			return &engine.Response{Content: parts[1], FinishReason: "stop"}, nil
-		}
-	}
-	return &engine.Response{Content: "MockModel received: " + lastUser, FinishReason: "stop"}, nil
-}
+var _ = sync.Mutex{} // suppress unused import
+var _ = agent.Config{}
+var _ = engine.Message{}
