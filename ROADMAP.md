@@ -35,13 +35,13 @@
 - [x] Custom API adapters (Cohere native chat API)
 - [x] `bonsai swarm` CLI command
 - [x] Health checks across all agents
-- [ ] Task routing by capability (coding → code model, creative → creative model)
-- [ ] Agent-to-agent (A2A) protocol support
-- [ ] MCP (Model Context Protocol) integration
-- [ ] Result judge/scoring with a "judge" model
-- [ ] Automatic fallback chains (if model A fails, try B, then C)
-- [ ] Swarm config file (YAML/JSON) for persistent agent fleets
-- [ ] WebSocket-based real-time swarm dashboard
+- [x] Task routing by capability (coding → code model, creative → creative model)
+- [x] Agent-to-agent (A2A) protocol support
+- [x] MCP (Model Context Protocol) integration
+- [x] Result judge/scoring with a "judge" model
+- [x] Automatic fallback chains (if model A fails, try B, then C)
+- [x] Swarm config file (YAML/JSON) for persistent agent fleets
+- [x] WebSocket-based real-time swarm dashboard
 
 **Good first issues:**
 - [#1] Add more provider configs (Together AI, Fireworks, Cerebras)
